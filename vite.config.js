@@ -3,7 +3,7 @@ import { defineConfig } from 'vite'
 
 // https://vite.dev/config/
 export default defineConfig({
-  base: '/civic-pulse-triage/',
+  base: '/',
   plugins: [react()],
   test: {
     environment: 'jsdom',
