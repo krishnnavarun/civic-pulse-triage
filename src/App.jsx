@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { categoryDepartments, triage } from './triage'
 import { createComplaintId, loadComplaints, saveComplaints } from './complaints'
 import './App.css'
@@ -130,6 +130,22 @@ function App() {
     }
   }
 
+  function exportComplaints() {
+    const columns = ['ID', 'Title', 'Description', 'Location', 'Category', 'Department', 'Severity', 'Status', 'Date']
+    const escape = (value) => `"${String(value ?? '').replaceAll('"', '""')}"`
+    const rows = visible.map((item) => [
+      item.id, item.title, item.description, item.location, item.category,
+      item.department, item.severity, item.status, item.date,
+    ].map(escape).join(','))
+    const csv = [columns.map(escape).join(','), ...rows].join('\n')
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = 'civic-pulse-complaints.csv'
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
   function updateComplaintStatus(id, status) {
     setComplaints((items) => items.map((item) => {
       if (item.id !== id) return item
@@ -158,13 +174,13 @@ function App() {
     )
   }
 
-  const visible = useMemo(() => complaints.filter((item) => {
+  const visible = complaints.filter((item) => {
     const matchesFilter = filter === 'All' || item.status === filter
     const term = search.trim().toLowerCase()
     const matchesSearch = !term || [item.title, item.description, item.location, item.category, item.id]
       .some((value) => value.toLowerCase().includes(term))
     return matchesFilter && matchesSearch
-  }), [complaints, filter, search])
+  })
   const resolved = complaints.filter((item) => item.status === 'Resolved').length
   const high = complaints.filter((item) => item.severity === 'High').length
 
@@ -220,6 +236,7 @@ function App() {
                   {['All', 'Submitted', 'Assigned', 'In Progress', 'Resolved'].map((item) => (
                     <button key={item} className={filter === item ? 'selected' : ''} onClick={() => setFilter(item)}>{item}</button>
                   ))}
+                  <button className="export-button" onClick={exportComplaints} type="button">Export CSV</button>
                 </div>
               </div>
             </div>
