@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it } from 'vitest'
 import App from './App'
 import { triage } from './triage'
+import { createComplaintId } from './complaints'
 
 afterEach(() => {
   cleanup()
@@ -24,10 +25,14 @@ describe('civic triage', () => {
     await user.click(screen.getAllByRole('button', { name: /report an issue/i })[0])
     await user.type(screen.getByLabelText(/issue title/i), 'Broken road barrier')
     await user.type(screen.getByLabelText(/describe the issue/i), 'A large barrier is blocking the lane')
-    await user.type(screen.getByLabelText(/location/i), 'Central Avenue')
+    await user.type(screen.getByPlaceholderText(/street, landmark, or area/i), 'Central Avenue')
     await user.click(screen.getByRole('button', { name: /submit complaint/i }))
 
     expect(screen.getByText('Complaint submitted')).toBeTruthy()
     expect(screen.getByText('Public Works Department')).toBeTruthy()
+  })
+
+  it('creates increasing complaint identifiers', () => {
+    expect(createComplaintId([{ id: 'CP-1048' }, { id: 'CP-1051' }])).toBe('CP-1052')
   })
 })

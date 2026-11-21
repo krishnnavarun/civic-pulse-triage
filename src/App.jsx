@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { categoryDepartments, triage } from './triage'
+import { createComplaintId, loadComplaints, saveComplaints } from './complaints'
 import './App.css'
 
 const seedComplaints = [
@@ -56,23 +57,27 @@ function StatusIcon({ status }) {
 
 function App() {
   const [view, setView] = useState('dashboard')
-  const [complaints, setComplaints] = useState(() => {
-    const saved = localStorage.getItem('civic-pulse-complaints')
-    return saved ? JSON.parse(saved) : seedComplaints
-  })
+  const [complaints, setComplaints] = useState(() => loadComplaints(seedComplaints))
   const [filter, setFilter] = useState('All')
   const [submitted, setSubmitted] = useState(null)
   const [search, setSearch] = useState('')
-  const [selected, setSelected] = useState(null)
+  const [selected, setSelected] = useState(() => {
+    const complaintId = new URLSearchParams(window.location.hash.replace('#', '')).get('complaint')
+    if (!complaintId) return null
+    return loadComplaints(seedComplaints).find((item) => item.id === complaintId) || null
+  })
+  const [authority, setAuthority] = useState(false)
+  const [language, setLanguage] = useState('EN')
+  const [statusMessage, setStatusMessage] = useState('')
   const [form, setForm] = useState({ title: '', description: '', location: '', category: 'Roads', imageName: '' })
 
-  useEffect(() => localStorage.setItem('civic-pulse-complaints', JSON.stringify(complaints)), [complaints])
+  useEffect(() => saveComplaints(complaints), [complaints])
 
   function submitComplaint(event) {
     event.preventDefault()
     const result = triage(form.description, form.category)
     const complaint = {
-      id: `CP-${1050 + complaints.length}`,
+      id: createComplaintId(complaints),
       ...form,
       ...result,
       status: 'Submitted',
@@ -84,6 +89,73 @@ function App() {
     setComplaints((items) => [complaint, ...items])
     setSubmitted(complaint)
     setForm({ title: '', description: '', location: '', category: 'Roads', imageName: '' })
+    setStatusMessage(`${complaint.id} submitted successfully`)
+  }
+
+  function attachPhoto(event) {
+    const file = event.target.files?.[0]
+    if (!file) {
+      setForm((current) => ({ ...current, imageName: '', imageUrl: '' }))
+      return
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setStatusMessage('Please choose an image smaller than 2 MB')
+      event.target.value = ''
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => setForm((current) => ({ ...current, imageName: file.name, imageUrl: reader.result }))
+    reader.readAsDataURL(file)
+  }
+
+  function openComplaint(item) {
+    setSelected(item)
+    window.history.replaceState(null, '', `#complaint=${encodeURIComponent(item.id)}`)
+  }
+
+  function closeComplaint() {
+    setSelected(null)
+    window.history.replaceState(null, '', window.location.pathname)
+  }
+
+  async function shareComplaint() {
+    if (!selected) return
+    const url = `${window.location.origin}${window.location.pathname}#complaint=${encodeURIComponent(selected.id)}`
+    try {
+      if (navigator.share) await navigator.share({ title: selected.title, text: `Track civic complaint ${selected.id}`, url })
+      else await navigator.clipboard.writeText(url)
+      setStatusMessage('Complaint tracking link copied')
+    } catch {
+      setStatusMessage('Unable to share this complaint')
+    }
+  }
+
+  function updateComplaintStatus(id, status) {
+    setComplaints((items) => items.map((item) => {
+      if (item.id !== id) return item
+      const timeline = [...(item.timeline || []), { status, date: 'Just now' }]
+        .filter((step, index, steps) => steps.findIndex((candidate) => candidate.status === step.status) === index)
+      return { ...item, status, timeline }
+    }))
+    setSelected((item) => item?.id === id ? { ...item, status, timeline: [
+      ...(item.timeline || []),
+      { status, date: 'Just now' },
+    ].filter((step, index, steps) => steps.findIndex((candidate) => candidate.status === step.status) === index) } : item)
+  }
+
+  function captureLocation() {
+    if (!navigator.geolocation) {
+      setStatusMessage('Location capture is not supported by this browser')
+      return
+    }
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => setForm((current) => ({
+        ...current,
+        location: `${coords.latitude.toFixed(5)}, ${coords.longitude.toFixed(5)}`,
+      })),
+      () => setStatusMessage('Location permission was not granted'),
+      { enableHighAccuracy: true, timeout: 10000 },
+    )
   }
 
   const visible = useMemo(() => complaints.filter((item) => {
@@ -106,9 +178,14 @@ function App() {
         <nav>
           <button className={view === 'dashboard' ? 'active' : ''} onClick={() => setView('dashboard')}>Dashboard</button>
           <button className={view === 'report' ? 'active' : ''} onClick={() => setView('report')}>Report an issue</button>
+          <button className={authority ? 'authority-button active' : 'authority-button'} onClick={() => setAuthority((value) => !value)}>{authority ? 'Citizen view' : 'Authority view'}</button>
         </nav>
+        <label className="language-select" aria-label="Display language">
+          <select value={language} onChange={(event) => setLanguage(event.target.value)}><option>EN</option><option>HI</option><option>KN</option></select>
+        </label>
         <button className="avatar" aria-label="User profile">KP</button>
       </header>
+      {statusMessage && <div className="status-banner" role="status">{statusMessage}<button onClick={() => setStatusMessage('')} aria-label="Dismiss notification">×</button></div>}
 
       {view === 'dashboard' ? (
         <main>
@@ -150,7 +227,7 @@ function App() {
             <div className="complaint-list">
               {visible.length === 0 && <div className="empty-state"><strong>No complaints found</strong><p>Try another search or status filter.</p></div>}
               {visible.map((item) => (
-                <article className="complaint-card" key={item.id} role="button" tabIndex="0" onClick={() => setSelected(item)} onKeyDown={(event) => event.key === 'Enter' && setSelected(item)}>
+                <article className="complaint-card" key={item.id} role="button" tabIndex="0" onClick={() => openComplaint(item)} onKeyDown={(event) => event.key === 'Enter' && openComplaint(item)}>
                   <div className="complaint-main">
                     <div className="complaint-title"><StatusIcon status={item.status} /><div><h3>{item.title}</h3><p>{item.location}</p></div></div>
                     <p className="description">{item.description}</p>
@@ -160,6 +237,11 @@ function App() {
                     <span className={`status ${item.status.toLowerCase().replaceAll(' ', '-')}`}>{item.status}</span>
                     <p><strong>{item.department}</strong></p>
                     <small>{item.date} · {item.id}</small>
+                    {authority && (
+                      <select className="authority-status" aria-label={`Update status for ${item.id}`} value={item.status} onClick={(event) => event.stopPropagation()} onChange={(event) => updateComplaintStatus(item.id, event.target.value)}>
+                        {['Submitted', 'Verified', 'Assigned', 'In Progress', 'Resolved'].map((status) => <option key={status}>{status}</option>)}
+                      </select>
+                    )}
                   </div>
                 </article>
               ))}
@@ -179,9 +261,15 @@ function App() {
               <label>Describe the issue<textarea required rows="5" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Describe what happened, risks involved, and how long it has been present." /></label>
               <div className="form-row">
                 <label>Category<select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>{Object.keys(categoryDepartments).map((name) => <option key={name}>{name}</option>)}</select></label>
-                <label>Location<input required value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="Street, landmark, or area" /></label>
+                <label>Location
+                  <span className="location-input">
+                    <input required value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="Street, landmark, or area" />
+                    <button type="button" onClick={captureLocation} aria-label="Use current location">⌖</button>
+                  </span>
+                </label>
               </div>
-              <label>Photo evidence <span className="optional">(optional)</span><input className="file-input" type="file" accept="image/*" onChange={(event) => setForm({ ...form, imageName: event.target.files?.[0]?.name || '' })} /></label>
+              <label>Photo evidence <span className="optional">(optional)</span><input className="file-input" type="file" accept="image/*" onChange={attachPhoto} /></label>
+              {form.imageUrl && <div className="image-preview"><img src={form.imageUrl} alt="Selected complaint evidence" /></div>}
               <button className="primary submit-button" type="submit">Submit complaint <span>→</span></button>
             </form>
             <aside className="triage-card">
@@ -197,11 +285,12 @@ function App() {
       {selected && (
         <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setSelected(null)}>
           <section className="detail-modal" role="dialog" aria-modal="true" aria-labelledby="complaint-detail-title">
-            <button className="modal-close" onClick={() => setSelected(null)} aria-label="Close complaint details">×</button>
+            <button className="modal-close" onClick={closeComplaint} aria-label="Close complaint details">×</button>
             <p className="eyebrow">{selected.id}</p>
             <h2 id="complaint-detail-title">{selected.title}</h2>
             <p className="modal-location">{selected.location}</p>
             <p className="modal-description">{selected.description}</p>
+            {selected.imageUrl && <img className="modal-image" src={selected.imageUrl} alt="Complaint evidence" />}
             <div className="modal-tags"><span className="category">{selected.category}</span><span className={`severity ${selected.severity.toLowerCase()}`}>{selected.severity} priority</span></div>
             <div className="detail-grid">
               <div><span>Department</span><strong>{selected.department}</strong></div>
@@ -213,6 +302,7 @@ function App() {
                 <li key={step.status}><span>✓</span><div><strong>{step.status}</strong><small>{step.date}</small></div></li>
               ))}
             </ol>
+            <button className="secondary share-button" onClick={shareComplaint}>Share tracking link</button>
           </section>
         </div>
       )}
