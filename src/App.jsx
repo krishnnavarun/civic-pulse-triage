@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { categoryDepartments, triage } from './triage'
 import './App.css'
 
 const seedComplaints = [
@@ -48,28 +49,6 @@ const seedComplaints = [
   },
 ]
 
-const categoryDepartments = {
-  Roads: 'Public Works Department',
-  Sanitation: 'Water & Sanitation',
-  Electricity: 'Electricity Board',
-  'Water Supply': 'Water Board',
-  Pollution: 'Pollution Control Board',
-  'Public Safety': 'Police Department',
-  Other: 'Municipal Helpdesk',
-}
-
-function triage(description, category) {
-  const text = description.toLowerCase(),
-    urgentWords = ['accident', 'danger', 'fire', 'collapse', 'exposed', 'injury', 'overflow', 'flood', 'blocked'],
-    severeWords = ['large', 'deep', 'broken', 'blocked', 'waste', 'smoke', 'pollution']
-  const severity = urgentWords.some((word) => text.includes(word))
-    ? 'High'
-    : severeWords.some((word) => text.includes(word))
-      ? 'Medium'
-      : 'Low'
-  return { severity, department: categoryDepartments[category] }
-}
-
 function StatusIcon({ status }) {
   const icons = { Submitted: '○', Verified: '◉', Assigned: '→', 'In Progress': '◷', Resolved: '✓' }
   return <span className={`status-icon ${status.toLowerCase().replaceAll(' ', '-')}`}>{icons[status] || '○'}</span>
@@ -83,7 +62,9 @@ function App() {
   })
   const [filter, setFilter] = useState('All')
   const [submitted, setSubmitted] = useState(null)
-  const [form, setForm] = useState({ title: '', description: '', location: '', category: 'Roads' })
+  const [search, setSearch] = useState('')
+  const [selected, setSelected] = useState(null)
+  const [form, setForm] = useState({ title: '', description: '', location: '', category: 'Roads', imageName: '' })
 
   useEffect(() => localStorage.setItem('civic-pulse-complaints', JSON.stringify(complaints)), [complaints])
 
@@ -96,13 +77,22 @@ function App() {
       ...result,
       status: 'Submitted',
       date: 'Just now',
+      timeline: [
+        { status: 'Submitted', date: 'Just now' },
+      ],
     }
     setComplaints((items) => [complaint, ...items])
     setSubmitted(complaint)
-    setForm({ title: '', description: '', location: '', category: 'Roads' })
+    setForm({ title: '', description: '', location: '', category: 'Roads', imageName: '' })
   }
 
-  const visible = filter === 'All' ? complaints : complaints.filter((item) => item.status === filter)
+  const visible = useMemo(() => complaints.filter((item) => {
+    const matchesFilter = filter === 'All' || item.status === filter
+    const term = search.trim().toLowerCase()
+    const matchesSearch = !term || [item.title, item.description, item.location, item.category, item.id]
+      .some((value) => value.toLowerCase().includes(term))
+    return matchesFilter && matchesSearch
+  }), [complaints, filter, search])
   const resolved = complaints.filter((item) => item.status === 'Resolved').length
   const high = complaints.filter((item) => item.severity === 'High').length
 
@@ -147,16 +137,20 @@ function App() {
           <section className="complaints-section">
             <div className="section-heading">
               <div><p className="eyebrow">LIVE UPDATES</p><h2>Recent complaints</h2></div>
-              <div className="filters">
-                {['All', 'Submitted', 'Assigned', 'In Progress', 'Resolved'].map((item) => (
-                  <button key={item} className={filter === item ? 'selected' : ''} onClick={() => setFilter(item)}>{item}</button>
-                ))}
+              <div className="dashboard-tools">
+                <input className="search-box" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search complaints" aria-label="Search complaints" />
+                <div className="filters">
+                  {['All', 'Submitted', 'Assigned', 'In Progress', 'Resolved'].map((item) => (
+                    <button key={item} className={filter === item ? 'selected' : ''} onClick={() => setFilter(item)}>{item}</button>
+                  ))}
+                </div>
               </div>
             </div>
 
             <div className="complaint-list">
+              {visible.length === 0 && <div className="empty-state"><strong>No complaints found</strong><p>Try another search or status filter.</p></div>}
               {visible.map((item) => (
-                <article className="complaint-card" key={item.id}>
+                <article className="complaint-card" key={item.id} role="button" tabIndex="0" onClick={() => setSelected(item)} onKeyDown={(event) => event.key === 'Enter' && setSelected(item)}>
                   <div className="complaint-main">
                     <div className="complaint-title"><StatusIcon status={item.status} /><div><h3>{item.title}</h3><p>{item.location}</p></div></div>
                     <p className="description">{item.description}</p>
@@ -187,6 +181,7 @@ function App() {
                 <label>Category<select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>{Object.keys(categoryDepartments).map((name) => <option key={name}>{name}</option>)}</select></label>
                 <label>Location<input required value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="Street, landmark, or area" /></label>
               </div>
+              <label>Photo evidence <span className="optional">(optional)</span><input className="file-input" type="file" accept="image/*" onChange={(event) => setForm({ ...form, imageName: event.target.files?.[0]?.name || '' })} /></label>
               <button className="primary submit-button" type="submit">Submit complaint <span>→</span></button>
             </form>
             <aside className="triage-card">
@@ -198,6 +193,28 @@ function App() {
             </aside>
           </div>
         </main>
+      )}
+      {selected && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setSelected(null)}>
+          <section className="detail-modal" role="dialog" aria-modal="true" aria-labelledby="complaint-detail-title">
+            <button className="modal-close" onClick={() => setSelected(null)} aria-label="Close complaint details">×</button>
+            <p className="eyebrow">{selected.id}</p>
+            <h2 id="complaint-detail-title">{selected.title}</h2>
+            <p className="modal-location">{selected.location}</p>
+            <p className="modal-description">{selected.description}</p>
+            <div className="modal-tags"><span className="category">{selected.category}</span><span className={`severity ${selected.severity.toLowerCase()}`}>{selected.severity} priority</span></div>
+            <div className="detail-grid">
+              <div><span>Department</span><strong>{selected.department}</strong></div>
+              <div><span>Current status</span><strong>{selected.status}</strong></div>
+            </div>
+            <h3>Progress timeline</h3>
+            <ol className="timeline">
+              {(selected.timeline || [{ status: 'Submitted', date: selected.date }]).map((step) => (
+                <li key={step.status}><span>✓</span><div><strong>{step.status}</strong><small>{step.date}</small></div></li>
+              ))}
+            </ol>
+          </section>
+        </div>
       )}
     </div>
   )
