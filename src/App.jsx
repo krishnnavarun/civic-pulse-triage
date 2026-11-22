@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { categoryDepartments, triage } from './triage'
 import { createComplaintId, loadComplaints, saveComplaints } from './complaints'
-import { authenticate, listComplaints, requestAIAnalysis, submitComplaint as submitComplaintToApi, updateServerStatus } from './api'
+import { authenticate, getAIStatus, listComplaints, submitComplaint as submitComplaintToApi, updateServerStatus } from './api'
 import './App.css'
 
 const seedComplaints = [
@@ -70,6 +70,7 @@ function App() {
   const [authority, setAuthority] = useState(false)
   const [language, setLanguage] = useState('EN')
   const [statusMessage, setStatusMessage] = useState('')
+  const [aiStatus, setAIStatus] = useState(null)
   const [apiSession, setApiSession] = useState(() => {
     try { return JSON.parse(localStorage.getItem('civic-pulse-session')) } catch { return null }
   })
@@ -78,6 +79,11 @@ function App() {
   const [form, setForm] = useState({ title: '', description: '', location: '', category: 'Roads', imageName: '' })
 
   useEffect(() => saveComplaints(complaints), [complaints])
+  useEffect(() => {
+    getAIStatus()
+      .then(setAIStatus)
+      .catch(() => setAIStatus({ configured: false, provider: 'rule-based-fallback', usage: { requests: 0 } }))
+  }, [])
   useEffect(() => {
     listComplaints()
       .then((items) => setComplaints(items))
@@ -91,11 +97,6 @@ function App() {
   async function submitComplaint(event) {
     event.preventDefault()
     let result = triage(form.description, form.category)
-    try {
-      result = await requestAIAnalysis(form.description, form.category)
-    } catch {
-      result = triage(form.description, form.category)
-    }
     const complaint = {
       id: createComplaintId(complaints),
       ...form,
@@ -251,6 +252,9 @@ function App() {
         <label className="language-select" aria-label="Display language">
           <select value={language} onChange={(event) => setLanguage(event.target.value)}><option>EN</option><option>HI</option><option>KN</option></select>
         </label>
+        {aiStatus && <span className={`ai-status-badge ${aiStatus.configured ? 'live' : ''}`} title={`${aiStatus.model} · ${aiStatus.usage?.requests || 0} AI requests`}>
+          ✦ {aiStatus.configured ? 'OpenAI live' : 'AI fallback'}
+        </span>}
         <button className="avatar" aria-label="User profile" onClick={() => setAuthMode(apiSession ? 'account' : 'login')}>
           {apiSession ? apiSession.user.name.slice(0, 2).toUpper() : 'KP'}
         </button>
@@ -362,7 +366,7 @@ function App() {
             <p className="modal-location">{selected.location}</p>
             <a className="map-link" target="_blank" rel="noreferrer" href={`https://www.openstreetmap.org/search?query=${encodeURIComponent(selected.location)}`}>View location on map ↗</a>
             <p className="modal-description">{selected.description}</p>
-            {selected.aiSummary && <div className="ai-summary"><span>AI analysis</span><p>{selected.aiSummary}</p></div>}
+            {selected.aiSummary && <div className="ai-summary"><span>AI analysis</span><p>{selected.aiSummary}</p>{selected.aiProvider && <small>{selected.aiProvider === 'openai' ? `OpenAI · ${selected.aiModel}` : 'Local rule-based fallback'}</small>}</div>}
             {selected.imageUrl && <img className="modal-image" src={selected.imageUrl} alt="Complaint evidence" />}
             <div className="modal-tags"><span className="category">{selected.category}</span><span className={`severity ${selected.severity.toLowerCase()}`}>{selected.severity} priority</span></div>
             <div className="detail-grid">

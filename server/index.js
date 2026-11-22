@@ -24,6 +24,16 @@ app.use(cors({ origin: process.env.CORS_ORIGIN?.split(',') || true }))
 app.use(express.json({ limit: '8mb' }))
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 2 * 1024 * 1024 } })
 
+const aiUsage = {
+  requests: 0,
+  openAIRequests: 0,
+  fallbackRequests: 0,
+  failures: 0,
+  promptTokens: 0,
+  completionTokens: 0,
+  totalTokens: 0,
+}
+
 const departments = {
   Roads: 'Public Works Department',
   Sanitation: 'Water & Sanitation',
@@ -44,10 +54,18 @@ function triage(description, category) {
 }
 
 async function analyzeComplaint(description, category) {
+  aiUsage.requests += 1
   const fallback = triage(description, category)
   if (!process.env.OPENAI_API_KEY) {
-    return { ...fallback, summary: `The report describes a ${category.toLowerCase()} issue requiring ${fallback.severity.toLowerCase()} priority attention.` }
+    aiUsage.fallbackRequests += 1
+    return {
+      ...fallback,
+      summary: `The report describes a ${category.toLowerCase()} issue requiring ${fallback.severity.toLowerCase()} priority attention.`,
+      provider: 'rule-based-fallback',
+      model: 'Local keyword triage',
+    }
   }
+  aiUsage.openAIRequests += 1
   try {
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -64,13 +82,27 @@ async function analyzeComplaint(description, category) {
     if (!response.ok) throw new Error('AI provider unavailable')
     const payload = await response.json()
     const ai = JSON.parse(payload.choices[0].message.content)
+    const usage = payload.usage || {}
+    aiUsage.promptTokens += usage.prompt_tokens || 0
+    aiUsage.completionTokens += usage.completion_tokens || 0
+    aiUsage.totalTokens += usage.total_tokens || 0
     return {
       severity: ['Low', 'Medium', 'High'].includes(ai.severity) ? ai.severity : fallback.severity,
       department: ai.department || fallback.department,
       summary: ai.summary || fallback.summary,
+      provider: 'openai',
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      tokens: usage,
     }
   } catch {
-    return fallback
+    aiUsage.failures += 1
+    aiUsage.fallbackRequests += 1
+    return {
+      ...fallback,
+      summary: `The report describes a ${category.toLowerCase()} issue requiring ${fallback.severity.toLowerCase()} priority attention.`,
+      provider: 'rule-based-fallback',
+      model: 'Local keyword triage',
+    }
   }
 }
 
@@ -91,6 +123,13 @@ function auth(requiredRole) {
 }
 
 app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'civic-pulse-api' }))
+
+app.get('/api/ai/status', (_req, res) => res.json({
+  configured: Boolean(process.env.OPENAI_API_KEY),
+  provider: process.env.OPENAI_API_KEY ? 'openai' : 'rule-based-fallback',
+  model: process.env.OPENAI_API_KEY ? (process.env.OPENAI_MODEL || 'gpt-4o-mini') : 'Local keyword triage',
+  usage: aiUsage,
+}))
 
 app.post('/api/triage', (req, res) => {
   const { description = '', category = 'Other' } = req.body
@@ -156,6 +195,9 @@ app.post('/api/complaints', upload.single('evidence'), async (req, res) => {
     longitude: body.longitude ? Number(body.longitude) : null,
     timeline: [{ status: 'Submitted', date: 'Just now' }],
     aiSummary: ai.summary,
+    aiProvider: ai.provider,
+    aiModel: ai.model,
+    aiTokens: ai.tokens || null,
   }
   await createComplaint(complaint)
   res.status(201).json(complaint)

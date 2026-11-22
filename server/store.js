@@ -50,6 +50,7 @@ export async function initializeStore() {
     location TEXT NOT NULL, category TEXT NOT NULL, department TEXT NOT NULL,
     severity TEXT NOT NULL, status TEXT NOT NULL, date TEXT NOT NULL,
     image_url TEXT, latitude DOUBLE PRECISION, longitude DOUBLE PRECISION,
+    ai_summary TEXT, ai_provider TEXT, ai_model TEXT, ai_tokens JSONB,
     timeline JSONB NOT NULL DEFAULT '[]', created_at TIMESTAMPTZ DEFAULT NOW()
   )`)
   await pool.query(`CREATE TABLE IF NOT EXISTS users (
@@ -70,7 +71,15 @@ export async function initializeStore() {
 export async function listComplaints() {
   if (pool) {
     const result = await pool.query('SELECT * FROM complaints ORDER BY created_at DESC')
-    return result.rows.map((row) => ({ ...row, imageUrl: row.image_url, timeline: row.timeline }))
+    return result.rows.map((row) => ({
+      ...row,
+      imageUrl: row.image_url,
+      aiSummary: row.ai_summary,
+      aiProvider: row.ai_provider,
+      aiModel: row.ai_model,
+      aiTokens: row.ai_tokens,
+      timeline: row.timeline,
+    }))
   }
   return (await readFileStore()).complaints
 }
@@ -78,11 +87,14 @@ export async function listComplaints() {
 export async function createComplaint(complaint) {
   if (pool) {
     await pool.query(`INSERT INTO complaints
-      (id,title,description,location,category,department,severity,status,date,image_url,latitude,longitude,timeline)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+      (id,title,description,location,category,department,severity,status,date,image_url,latitude,longitude,
+       ai_summary,ai_provider,ai_model,ai_tokens,timeline)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
     [complaint.id, complaint.title, complaint.description, complaint.location, complaint.category,
       complaint.department, complaint.severity, complaint.status, complaint.date,
       complaint.imageUrl || null, complaint.latitude || null, complaint.longitude || null,
+      complaint.aiSummary || null, complaint.aiProvider || null, complaint.aiModel || null,
+      complaint.aiTokens ? JSON.stringify(complaint.aiTokens) : null,
       JSON.stringify(complaint.timeline || [])])
     return complaint
   }

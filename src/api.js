@@ -36,6 +36,10 @@ export async function authenticate(mode, credentials) {
   })
 }
 
+export async function getAIStatus() {
+  return apiRequest('/ai/status')
+}
+
 export async function requestAIAnalysis(description, category) {
   return apiRequest('/ai/triage', {
     method: 'POST',
