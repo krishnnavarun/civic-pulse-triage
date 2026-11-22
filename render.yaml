@@ -14,3 +14,11 @@ services:
         sync: false
       - key: AUTHORITY_REGISTRATION_CODE
         generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: civic-pulse-db
+          property: connectionString
+
+databases:
+  - name: civic-pulse-db
+    databaseName: civic_pulse
