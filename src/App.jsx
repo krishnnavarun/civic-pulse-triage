@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { categoryDepartments, triage } from './triage'
 import { createComplaintId, loadComplaints, saveComplaints } from './complaints'
+import { authenticate, listComplaints, submitComplaint as submitComplaintToApi, updateServerStatus } from './api'
 import './App.css'
 
 const seedComplaints = [
@@ -69,11 +70,25 @@ function App() {
   const [authority, setAuthority] = useState(false)
   const [language, setLanguage] = useState('EN')
   const [statusMessage, setStatusMessage] = useState('')
+  const [apiSession, setApiSession] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('civic-pulse-session')) } catch { return null }
+  })
+  const [authMode, setAuthMode] = useState(null)
+  const [authForm, setAuthForm] = useState({ name: '', email: '', password: '' })
   const [form, setForm] = useState({ title: '', description: '', location: '', category: 'Roads', imageName: '' })
 
   useEffect(() => saveComplaints(complaints), [complaints])
+  useEffect(() => {
+    listComplaints()
+      .then((items) => setComplaints(items))
+      .catch(() => {})
+  }, [])
+  useEffect(() => {
+    if (apiSession) localStorage.setItem('civic-pulse-session', JSON.stringify(apiSession))
+    else localStorage.removeItem('civic-pulse-session')
+  }, [apiSession])
 
-  function submitComplaint(event) {
+  async function submitComplaint(event) {
     event.preventDefault()
     const result = triage(form.description, form.category)
     const complaint = {
@@ -86,10 +101,16 @@ function App() {
         { status: 'Submitted', date: 'Just now' },
       ],
     }
-    setComplaints((items) => [complaint, ...items])
-    setSubmitted(complaint)
+    let savedComplaint = complaint
+    try {
+      savedComplaint = await submitComplaintToApi(complaint)
+    } catch {
+      setStatusMessage('Saved locally while the API is unavailable')
+    }
+    setComplaints((items) => [savedComplaint, ...items.filter((item) => item.id !== savedComplaint.id)])
+    setSubmitted(savedComplaint)
     setForm({ title: '', description: '', location: '', category: 'Roads', imageName: '' })
-    setStatusMessage(`${complaint.id} submitted successfully`)
+    setStatusMessage(`${savedComplaint.id} submitted successfully`)
   }
 
   function attachPhoto(event) {
@@ -146,7 +167,15 @@ function App() {
     URL.revokeObjectURL(url)
   }
 
-  function updateComplaintStatus(id, status) {
+  async function updateComplaintStatus(id, status) {
+    if (apiSession?.token) {
+      try {
+        await updateServerStatus(id, status, apiSession.token)
+      } catch (error) {
+        setStatusMessage(error.message)
+        return
+      }
+    }
     setComplaints((items) => items.map((item) => {
       if (item.id !== id) return item
       const timeline = [...(item.timeline || []), { status, date: 'Just now' }]
@@ -157,6 +186,23 @@ function App() {
       ...(item.timeline || []),
       { status, date: 'Just now' },
     ].filter((step, index, steps) => steps.findIndex((candidate) => candidate.status === step.status) === index) } : item)
+    if (status === 'Resolved' && 'Notification' in window && Notification.permission === 'granted') {
+      new Notification('Civic Pulse complaint resolved', { body: `${id} has been marked resolved.` })
+    }
+  }
+
+  async function submitAuth(event) {
+    event.preventDefault()
+    try {
+      const session = await authenticate(authMode, authForm)
+      setApiSession(session)
+      setAuthMode(null)
+      setAuthForm({ name: '', email: '', password: '' })
+      setStatusMessage(`Signed in as ${session.user.name}`)
+      if (session.user.role === 'authority') setAuthority(true)
+    } catch (error) {
+      setStatusMessage(error.message)
+    }
   }
 
   function captureLocation() {
@@ -199,7 +245,9 @@ function App() {
         <label className="language-select" aria-label="Display language">
           <select value={language} onChange={(event) => setLanguage(event.target.value)}><option>EN</option><option>HI</option><option>KN</option></select>
         </label>
-        <button className="avatar" aria-label="User profile">KP</button>
+        <button className="avatar" aria-label="User profile" onClick={() => setAuthMode(apiSession ? 'account' : 'login')}>
+          {apiSession ? apiSession.user.name.slice(0, 2).toUpper() : 'KP'}
+        </button>
       </header>
       {statusMessage && <div className="status-banner" role="status">{statusMessage}<button onClick={() => setStatusMessage('')} aria-label="Dismiss notification">×</button></div>}
 
@@ -306,6 +354,7 @@ function App() {
             <p className="eyebrow">{selected.id}</p>
             <h2 id="complaint-detail-title">{selected.title}</h2>
             <p className="modal-location">{selected.location}</p>
+            <a className="map-link" target="_blank" rel="noreferrer" href={`https://www.openstreetmap.org/search?query=${encodeURIComponent(selected.location)}`}>View location on map ↗</a>
             <p className="modal-description">{selected.description}</p>
             {selected.imageUrl && <img className="modal-image" src={selected.imageUrl} alt="Complaint evidence" />}
             <div className="modal-tags"><span className="category">{selected.category}</span><span className={`severity ${selected.severity.toLowerCase()}`}>{selected.severity} priority</span></div>
@@ -320,6 +369,28 @@ function App() {
               ))}
             </ol>
             <button className="secondary share-button" onClick={shareComplaint}>Share tracking link</button>
+          </section>
+        </div>
+      )}
+      {authMode && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setAuthMode(null)}>
+          <section className="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+            <button className="modal-close" onClick={() => setAuthMode(null)} aria-label="Close authentication">×</button>
+            {authMode === 'account' ? (
+              <><p className="eyebrow">YOUR ACCOUNT</p><h2 id="auth-title">{apiSession.user.name}</h2><p>{apiSession.user.email}</p><p className="account-role">{apiSession.user.role}</p><button className="primary auth-submit" onClick={() => { setApiSession(null); setAuthority(false); setAuthMode(null); setStatusMessage('Signed out') }}>Sign out</button></>
+            ) : (
+              <form onSubmit={submitAuth}>
+                <p className="eyebrow">SECURE ACCESS</p>
+                <h2 id="auth-title">{authMode === 'login' ? 'Sign in' : 'Create account'}</h2>
+                {authMode === 'register' && <label>Full name<input required value={authForm.name} onChange={(event) => setAuthForm({ ...authForm, name: event.target.value })} /></label>}
+                <label>Email<input required type="email" value={authForm.email} onChange={(event) => setAuthForm({ ...authForm, email: event.target.value })} /></label>
+                <label>Password<input required type="password" minLength="8" value={authForm.password} onChange={(event) => setAuthForm({ ...authForm, password: event.target.value })} /></label>
+                {authMode === 'register' && <label>Account role<select value={authForm.role || 'citizen'} onChange={(event) => setAuthForm({ ...authForm, role: event.target.value })}><option value="citizen">Citizen</option><option value="authority">Authority</option></select></label>}
+                {authMode === 'register' && authForm.role === 'authority' && <label>Authority registration code<input type="password" value={authForm.authorityCode || ''} onChange={(event) => setAuthForm({ ...authForm, authorityCode: event.target.value })} /></label>}
+                <button className="primary auth-submit" type="submit">{authMode === 'login' ? 'Sign in' : 'Create account'}</button>
+                <button type="button" className="auth-switch" onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}>{authMode === 'login' ? 'New user? Create an account' : 'Already have an account? Sign in'}</button>
+              </form>
+            )}
           </section>
         </div>
       )}

@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: civic-pulse-triage
+    runtime: node
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: JWT_SECRET
+        generateValue: true
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: AUTHORITY_REGISTRATION_CODE
+        generateValue: true
