@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { categoryDepartments, triage } from './triage'
 import { createComplaintId, loadComplaints, saveComplaints } from './complaints'
-import { authenticate, listComplaints, submitComplaint as submitComplaintToApi, updateServerStatus } from './api'
+import { authenticate, listComplaints, requestAIAnalysis, submitComplaint as submitComplaintToApi, updateServerStatus } from './api'
 import './App.css'
 
 const seedComplaints = [
@@ -90,11 +90,17 @@ function App() {
 
   async function submitComplaint(event) {
     event.preventDefault()
-    const result = triage(form.description, form.category)
+    let result = triage(form.description, form.category)
+    try {
+      result = await requestAIAnalysis(form.description, form.category)
+    } catch {
+      result = triage(form.description, form.category)
+    }
     const complaint = {
       id: createComplaintId(complaints),
       ...form,
       ...result,
+      aiSummary: result.summary,
       status: 'Submitted',
       date: 'Just now',
       timeline: [
@@ -356,6 +362,7 @@ function App() {
             <p className="modal-location">{selected.location}</p>
             <a className="map-link" target="_blank" rel="noreferrer" href={`https://www.openstreetmap.org/search?query=${encodeURIComponent(selected.location)}`}>View location on map ↗</a>
             <p className="modal-description">{selected.description}</p>
+            {selected.aiSummary && <div className="ai-summary"><span>AI analysis</span><p>{selected.aiSummary}</p></div>}
             {selected.imageUrl && <img className="modal-image" src={selected.imageUrl} alt="Complaint evidence" />}
             <div className="modal-tags"><span className="category">{selected.category}</span><span className={`severity ${selected.severity.toLowerCase()}`}>{selected.severity} priority</span></div>
             <div className="detail-grid">

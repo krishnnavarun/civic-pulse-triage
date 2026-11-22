@@ -35,3 +35,11 @@ export async function authenticate(mode, credentials) {
     body: JSON.stringify(credentials),
   })
 }
+
+export async function requestAIAnalysis(description, category) {
+  return apiRequest('/ai/triage', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ description, category }),
+  })
+}

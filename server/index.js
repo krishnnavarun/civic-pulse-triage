@@ -43,6 +43,37 @@ function triage(description, category) {
   return { severity, department: departments[category] || departments.Other }
 }
 
+async function analyzeComplaint(description, category) {
+  const fallback = triage(description, category)
+  if (!process.env.OPENAI_API_KEY) {
+    return { ...fallback, summary: `The report describes a ${category.toLowerCase()} issue requiring ${fallback.severity.toLowerCase()} priority attention.` }
+  }
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: 'Analyze civic complaints. Return JSON with severity (Low, Medium, or High), department, and a concise summary of 15 words or fewer.' },
+          { role: 'user', content: `Category: ${category}\nComplaint: ${description}` },
+        ],
+      }),
+    })
+    if (!response.ok) throw new Error('AI provider unavailable')
+    const payload = await response.json()
+    const ai = JSON.parse(payload.choices[0].message.content)
+    return {
+      severity: ['Low', 'Medium', 'High'].includes(ai.severity) ? ai.severity : fallback.severity,
+      department: ai.department || fallback.department,
+      summary: ai.summary || fallback.summary,
+    }
+  } catch {
+    return fallback
+  }
+}
+
 function auth(requiredRole) {
   return (req, res, next) => {
     const token = req.headers.authorization?.replace(/^Bearer\s+/i, '')
@@ -69,27 +100,8 @@ app.post('/api/triage', (req, res) => {
 
 app.post('/api/ai/triage', async (req, res) => {
   const { description = '', category = 'Other' } = req.body
-  if (!process.env.OPENAI_API_KEY) return res.json(triage(description, category))
-  try {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: 'Analyze civic complaints. Return JSON with severity (Low, Medium, or High), department, and summary.' },
-          { role: 'user', content: `Category: ${category}\nComplaint: ${description}` },
-        ],
-      }),
-    })
-    if (!response.ok) throw new Error('AI provider unavailable')
-    const payload = await response.json()
-    const ai = JSON.parse(payload.choices[0].message.content)
-    res.json({ severity: ai.severity, department: ai.department || departments[category], summary: ai.summary })
-  } catch {
-    res.json(triage(description, category))
-  }
+  if (!description.trim()) return res.status(400).json({ error: 'Description is required' })
+  res.json(await analyzeComplaint(description, category))
 })
 
 app.post('/api/auth/register', async (req, res) => {
@@ -124,7 +136,7 @@ app.post('/api/complaints', upload.single('evidence'), async (req, res) => {
   if (!body.title?.trim() || !body.description?.trim() || !body.location?.trim()) {
     return res.status(400).json({ error: 'Title, description, and location are required' })
   }
-  const ai = triage(body.description, body.category)
+  const ai = await analyzeComplaint(body.description, body.category)
   const complaints = await listComplaints()
   const numbers = complaints.map((item) => Number(item.id?.replace('CP-', ''))).filter(Number.isFinite)
   const id = `CP-${Math.max(1048, ...numbers) + 1}`
@@ -143,6 +155,7 @@ app.post('/api/complaints', upload.single('evidence'), async (req, res) => {
     latitude: body.latitude ? Number(body.latitude) : null,
     longitude: body.longitude ? Number(body.longitude) : null,
     timeline: [{ status: 'Submitted', date: 'Just now' }],
+    aiSummary: ai.summary,
   }
   await createComplaint(complaint)
   res.status(201).json(complaint)
