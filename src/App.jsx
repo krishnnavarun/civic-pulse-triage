@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { categoryDepartments, triage } from './triage'
 import { createComplaintId, loadComplaints, saveComplaints } from './complaints'
-import { authenticate, getAIStatus, listComplaints, submitComplaint as submitComplaintToApi, updateServerStatus } from './api'
+import { authenticate, getAIStatus, listComplaints, requestAIAnalysis, submitComplaint as submitComplaintToApi, updateServerStatus } from './api'
 import './App.css'
 
 const seedComplaints = [
@@ -77,6 +77,7 @@ function App() {
   const [authMode, setAuthMode] = useState(null)
   const [authForm, setAuthForm] = useState({ name: '', email: '', password: '' })
   const [form, setForm] = useState({ title: '', description: '', location: '', category: 'Roads', imageName: '' })
+  const [liveAI, setLiveAI] = useState(null)
 
   useEffect(() => saveComplaints(complaints), [complaints])
   useEffect(() => {
@@ -89,6 +90,15 @@ function App() {
       .then((items) => setComplaints(items))
       .catch(() => {})
   }, [])
+  useEffect(() => {
+    if (view !== 'report' || form.description.trim().length < 12) return
+    const timer = window.setTimeout(() => {
+      requestAIAnalysis(form.description, form.category)
+        .then((analysis) => setLiveAI({ ...analysis, analyzing: false }))
+        .catch(() => setLiveAI(null))
+    }, 650)
+    return () => window.clearTimeout(timer)
+  }, [form.description, form.category, view])
   useEffect(() => {
     if (apiSession) localStorage.setItem('civic-pulse-session', JSON.stringify(apiSession))
     else localStorage.removeItem('civic-pulse-session')
@@ -333,7 +343,7 @@ function App() {
           <div className="report-layout">
             <form className="report-form" onSubmit={submitComplaint}>
               <label>Issue title<input required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Example: Deep pothole on Main Road" /></label>
-              <label>Describe the issue<textarea required rows="5" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Describe what happened, risks involved, and how long it has been present." /></label>
+              <label>Describe the issue<textarea required rows="5" value={form.description} onChange={(e) => { setForm({ ...form, description: e.target.value }); if (e.target.value.trim().length < 12) setLiveAI(null) }} placeholder="Describe what happened, risks involved, and how long it has been present." /></label>
               <div className="form-row">
                 <label>Category<select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>{Object.keys(categoryDepartments).map((name) => <option key={name}>{name}</option>)}</select></label>
                 <label>Location
@@ -349,9 +359,20 @@ function App() {
             </form>
             <aside className="triage-card">
               {submitted ? (
-                <><span className="success-mark">✓</span><h2>Complaint submitted</h2><p className="triage-id">{submitted.id}</p><div className="triage-result"><p><span>Severity</span><strong className={submitted.severity.toLowerCase()}>{submitted.severity}</strong></p><p><span>Routed to</span><strong>{submitted.department}</strong></p><p><span>Status</span><strong>Submitted</strong></p></div><button className="secondary" onClick={() => setView('dashboard')}>View public dashboard</button></>
+                <><span className="success-mark">✓</span><h2>Complaint submitted</h2><p className="triage-id">{submitted.id}</p><div className="triage-result"><p><span>Severity</span><strong className={submitted.severity.toLowerCase()}>{submitted.severity}</strong></p><p><span>Routed to</span><strong>{submitted.department}</strong></p><p><span>Status</span><strong>Submitted</strong></p></div>{submitted.aiSummary && <div className="ai-summary"><span>AI analysis</span><p>{submitted.aiSummary}</p><small>{submitted.aiProvider === 'openai' ? `OpenAI · ${submitted.aiModel}` : 'Local rule-based fallback'}</small></div>}<button className="secondary" onClick={() => setView('dashboard')}>View public dashboard</button></>
               ) : (
-                <><span className="ai-mark">✦</span><h2>AI civic triage</h2><p>Your complaint will be checked for urgency and automatically assigned to the relevant authority.</p><ul><li><span>01</span> Category detection</li><li><span>02</span> Severity scoring</li><li><span>03</span> Department routing</li></ul></>
+                <><span className="ai-mark">✦</span><h2>AI civic triage</h2><p>Your complaint is analyzed as you describe it.</p>
+                  {liveAI ? (
+                    <div className="live-ai-result">
+                      <p><span>Severity</span><strong className={liveAI.severity?.toLowerCase()}>{liveAI.severity}</strong></p>
+                      <p><span>Route</span><strong>{liveAI.department}</strong></p>
+                      {liveAI.summary && <p className="live-ai-summary">{liveAI.summary}</p>}
+                      <small>{liveAI.provider === 'openai' ? `OpenAI · ${liveAI.model}` : 'Local rule-based fallback'}</small>
+                    </div>
+                  ) : (
+                    <ul><li><span>01</span> Category detection</li><li><span>02</span> Severity scoring</li><li><span>03</span> Department routing</li></ul>
+                  )}
+                </>
               )}
             </aside>
           </div>
